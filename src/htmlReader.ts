@@ -1,172 +1,151 @@
-import * as request from 'request';
-import * as cheerio from 'cheerio';
-import * as Promise_ from 'promise';
-import { BookList, BookInfo, Shelf } from './types';
+import * as request from 'request'
+import * as cheerio from 'cheerio'
+import * as Promise_ from 'promise'
+import { BookList, BookInfo, Shelf } from './types'
 
 export class HtmlReader {
 
-    protected openRequests: number;
+    protected openRequests: number
 
-    constructor() {
-        this.openRequests = 0;
-    }
+    constructor() { }
 
-    public getBookList(profilePageURL: string): Promise_<BookList[]> {
+    public async getBookList(profilePageURL: string): Promise_<BookList[]> {
+        let bookList: BookList[] = []
+        let allCurrentBooks: BookInfo[] = []
+        profilePageURL += '/biblioteczka/miniatury'
+        let profilePageHTML = await this.readPageHtml(profilePageURL)
+        console.log(`Profile page request done.`)
+        let shelfList: Shelf[] = this.reedShelfList(profilePageHTML)
 
-        profilePageURL += '/biblioteczka/miniatury';
-
-        let allShelfsPromise: Promise_<BookList[]> = new Promise_((resolve, reject) => {
-
-            this.openRequests++
-            request(profilePageURL, (error, response, BODY) => {
-                this.openRequests--;
-                console.log(`Profile page request done.`);
-                let shelfList: Shelf[] = this.reedShelfList(BODY);
-                let allShelfPromises: Promise_<BookList>[] = [];
-
-                for (let i = 0; i < shelfList.length; i++) {
-                    let shelfPromise: Promise_<BookList> = new Promise_((resolve, reject) => {
-                        this.openRequests++;
-                        request(shelfList[i].shelfURL, (error, response, BODY) => {
-                            this.openRequests--;
-                            console.log(`Shelf page request done. shelf: ${shelfList[i].shelfName}`);
-
-                            this.reedAllBooksFromShelf(BODY, shelfList[i].shelfURL)
-                                .done(allBooksFromShelf => {
-                                    console.log(`Read all books from shelf: \t${shelfList[i].shelfName}`);
-
-                                    let bookList: BookList = {
-                                        listName: shelfList[i].shelfName,
-                                        books: allBooksFromShelf
-                                    }
-                                    resolve(bookList);
-                                });
-                        });
-                    });
-                    allShelfPromises.push(shelfPromise);
-                }
-
-                Promise_.all(allShelfPromises)
-                    .done(allShelfs => {
-                        console.log(`\n=== All data read ===\n`);
-                        resolve(allShelfs);
-                    });
-            });
-        });
-
-        return allShelfsPromise;
-    }
-
-    protected sleep(ms: number) {
-        return new Promise_(resolve => {
-            setTimeout(resolve, ms)
+        for (let i = 0; i < shelfList.length; i++) {
+            let shelfPageHTML = await this.readPageHtml(shelfList[i].shelfURL)
+            console.log(`Shelf page request done.`)
+            bookList.push({
+                listName: shelfList[i].shelfName,
+                books: await this.reedAllBooksFromShelf(shelfPageHTML, shelfList[i].shelfURL, allCurrentBooks)
+            })
+            console.log(`Read all books from shelf: ${shelfList[i].shelfName}`)
+            allCurrentBooks = allCurrentBooks.concat(bookList[i].books)
+        }
+        return new Promise_((resolve) => {
+            resolve(bookList)
         })
     }
 
     protected reedShelfList(BODY): Shelf[] {
-        let $ = cheerio.load(BODY);
-        let shelfList: Shelf[] = [];
+        let $ = cheerio.load(BODY)
+        let shelfList: Shelf[] = []
 
         $('li.shelf').each((index, list) => {
-            let shelfName = $(list).children('a').text();
-            let shelfURL = $(list).children('a').attr('href');
+            let shelfName = $(list).children('a').text()
+            let shelfURL = $(list).children('a').attr('href')
 
             // if (shelfName == '2014' || shelfName == '2015' || shelfName == '2016' || shelfName == '2017' || shelfName == '2018' || shelfName == '2019')
             shelfList.push({
                 shelfName: shelfName,
                 shelfURL: shelfURL.slice(0, 4) === 'http' ? shelfURL : 'http://lubimyczytac.pl/' + shelfURL
-            });
-        });
+            })
+        })
 
-        return shelfList;
+        return shelfList
     }
 
-    protected reedAllBooksFromShelf(BODY, shelfURL: string): Promise_<BookInfo[]> {
-        let $ = cheerio.load(BODY);
-        let booksFromPagePromises: Promise_<BookInfo[]>[] = [];
+    protected readPageHtml(pageURL: string): Promise_<string> {
+        return new Promise_((resolve, reject) => {
+            request(pageURL, (error, response, BODY) => {
+                resolve(BODY)
+            })
+        })
+    }
 
-        let shelfLastSubpageNumber = Number($('td.centered ul').children().last().children('a').text());
-        let shelfSubpageAmmount = shelfLastSubpageNumber != 0 ? shelfLastSubpageNumber : 1;
+    protected async reedAllBooksFromShelf(shelfPageHTML: string, shelfURL: string, allCurrentBooks: BookInfo[]): Promise_<BookInfo[]> {
+        let $ = cheerio.load(shelfPageHTML)
+        let booksFromAllPages: BookInfo[] = []
+        let shelfLastSubpageNumber = Number($('td.centered ul').children().last().children('a').text())
+        let shelfSubpageAmmount = shelfLastSubpageNumber != 0 ? shelfLastSubpageNumber : 1
 
         for (let i = 1; i <= shelfSubpageAmmount; i++) {
-            let shelfSubpageURL = shelfURL + `/${i}`;
+            let shelfSubpageURL = shelfURL + `/${i}`
 
-            let booksFromPagePromise: Promise_<BookInfo[]> = new Promise_((resolve, reject) => {
-                this.openRequests++;
-                request(shelfSubpageURL, (error, response, BODY) => {
-                    this.openRequests--;
-                    console.log(`Shelf subpage request done.`);
+            let shelfSubpageHTML: string = await this.readPageHtml(shelfSubpageURL)
+            console.log(`Shelf subpage request done.`)
 
-                    this.getAllBooksFromPage(BODY)
-                        .done(allBOoksFromPage => {
-                            resolve(allBOoksFromPage);
-                        });
-                });
-            });
-            booksFromPagePromises.push(booksFromPagePromise);
+            let booksFromPage: BookInfo[] = await this.readAllBooksFromPage(shelfSubpageHTML, allCurrentBooks)
+            booksFromAllPages = booksFromAllPages.concat(booksFromPage)
         }
 
-        let allBooksFromShelfPromise: Promise_<BookInfo[]> = new Promise_((resolve, reject) => {
-            Promise_.all(booksFromPagePromises)
-                .done(allBooksFromAllPages => {
-                    let allBooksFromShelf: BookInfo[] = [];
-
-                    for (let i = 0; i < allBooksFromAllPages.length; i++) {
-                        allBooksFromShelf = allBooksFromShelf.concat(allBooksFromAllPages[i]);
-                    }
-                    resolve(allBooksFromShelf);
-                });
-
-        });
-        return allBooksFromShelfPromise;
+        return new Promise_((resolve) => {
+            resolve(booksFromAllPages)
+        })
     }
 
-    protected getAllBooksFromPage(BODY): Promise_<BookInfo[]> {
-        let $: CheerioStatic = cheerio.load(BODY);
-        let booksPromises: Promise_<BookInfo>[] = [];
+    protected bookIDRegeq = /(\/)[0-9]+(\/)/
+
+    protected readAllBooksFromPage(shelfSubpageHTML: string, allCurrentBooks: BookInfo[]): Promise_<BookInfo[]> {
+        let $: CheerioStatic = cheerio.load(shelfSubpageHTML)
+        let booksPromises: Promise_<BookInfo>[] = []
 
         $('div.library-shelf').each((index, shelf) => {
             $(shelf).children('div').each((index, book) => {
-                let bookLink = $(book).children('a').attr('href');
+                let bookLink = $(book).children('a').attr('href')
                 if (bookLink) {
-                    let bookPromise: Promise_<BookInfo> = new Promise_(async (resolve, reject) => {
-                        this.openRequests++;
-                        // while (this.openRequests > 20) {
-                        //     await this.sleep(3000);
-                        // }
-                        request(bookLink, (error, response, BODY) => {
-                            this.openRequests--;
-                            // console.log(`Book page request done.`);
-                            console.log(`Open requests:\t${this.openRequests}`);
-                            resolve(this.getBookInfo(BODY));
-                        });
-                    });
-                    booksPromises.push(bookPromise);
+
+                    let bookID: string = this.bookIDRegeq.exec(bookLink)[0]
+                    bookID = bookID.slice(1)
+                    bookID = bookID.slice(0, bookID.length - 1)
+
+                    let bookInfo: BookInfo = this.bookPageAlreadyRead(bookID, allCurrentBooks)
+                    
+                    if (!bookInfo) {
+                        booksPromises.push(new Promise_((resolve, reject) => {
+                            request(bookLink, (error, response, bookPageHTML) => {
+                                let bookInfo = this.getBookInfo(bookPageHTML, bookID)
+                                console.log(`Read info on book: ${bookInfo.title}`)
+                                resolve(bookInfo)
+                            })
+                        }))
+                    } else {
+                        booksPromises.push(new Promise_((resolve, reject) => {
+                            resolve(bookInfo)
+                        }))
+                    }
                 }
-            });
-        });
+            })
+        })
 
         let allBooksFromPagePromise: Promise_<BookInfo[]> = new Promise_((resolve, reject) => {
             Promise_.all(booksPromises)
                 .done(bookInfo => {
-                    resolve(bookInfo);
-                });
-        });
+                    resolve(bookInfo)
+                })
+        })
 
-        return allBooksFromPagePromise;
+        return allBooksFromPagePromise
     }
 
-    protected getBookInfo(BODY): BookInfo {
-        let $ = cheerio.load(BODY);
-        let book: BookInfo;
+    protected bookPageAlreadyRead(bookID: string, allCurrentBooks: BookInfo[]): BookInfo {
+        let matchingBook: BookInfo
+        for (let bookInfo of allCurrentBooks) {
+            if (bookInfo.LCid === bookID) {
+                matchingBook = bookInfo
+                break
+            }
+        }
+        return matchingBook
+    }
+
+    protected getBookInfo(bookPageHTML: string, bookID: string): BookInfo {
+        let $ = cheerio.load(bookPageHTML)
+        let book: BookInfo
 
         book = {
             title: $('h1[itemprop = "name"]').text(),
             author: $('div.author-info-container').children('span').children('a').text(),
             pages: parseInt($('dt:contains("liczba stron")').next().text()),
             genre: $('a[itemprop = "genre"]').text(),
+            LCid: bookID
         }
-        return book;
+        return book
     }
 
 }

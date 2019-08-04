@@ -7,10 +7,13 @@ export type BookInfo = {
     title?: string,
     author?: string,
     pages?: number,
-    genre?: string
+    genre?: string,
+    LCid?: string
 }
 
 export type Shelf = {
     shelfName: string,
     shelfURL: string
 }
+
+// export type AllBooks = BookInfo[]
